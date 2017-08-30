@@ -48,7 +48,7 @@ public abstract class BaseGenericObjectPool<T> {
     //最大对象数量
     private volatile int maxTotal =
             GenericKeyedObjectPoolConfig.DEFAULT_MAX_TOTAL;
-    //对象耗尽时是否阻塞
+    //池对象耗尽时是否阻塞
     private volatile boolean blockWhenExhausted =
             BaseObjectPoolConfig.DEFAULT_BLOCK_WHEN_EXHAUSTED;
     //最大等待时间
@@ -56,7 +56,7 @@ public abstract class BaseGenericObjectPool<T> {
             BaseObjectPoolConfig.DEFAULT_MAX_WAIT_MILLIS;
     //是否后进先出
     private volatile boolean lifo = BaseObjectPoolConfig.DEFAULT_LIFO;
-    //是否公平
+    //是否公平（公平好像使用FIFI方式）
     private final boolean fairness;
     //是否创建时测试可用性
     private volatile boolean testOnCreate =
@@ -70,7 +70,7 @@ public abstract class BaseGenericObjectPool<T> {
     //是否空闲时测试可用性
     private volatile boolean testWhileIdle =
             BaseObjectPoolConfig.DEFAULT_TEST_WHILE_IDLE;
-    //多久进行一次驱逐
+    //多久进行一次驱逐-为非正时，没有空闲对象时会驱逐
     private volatile long timeBetweenEvictionRunsMillis =
             BaseObjectPoolConfig.DEFAULT_TIME_BETWEEN_EVICTION_RUNS_MILLIS;
     //测试可用性时每次检查几个对象
@@ -120,9 +120,9 @@ public abstract class BaseGenericObjectPool<T> {
     final AtomicLong createdCount = new AtomicLong(0);
     //销毁总数
     final AtomicLong destroyedCount = new AtomicLong(0);
-    //销毁的驱逐总数
+    //由于驱逐被销毁的对象总数
     final AtomicLong destroyedByEvictorCount = new AtomicLong(0);
-    //销毁的借用校验总数（？？）
+    //由于失败被销毁的对象总数
     final AtomicLong destroyedByBorrowValidationCount = new AtomicLong(0);
     //活动时间
     private final StatsStore activeTimes = new StatsStore(MEAN_TIMING_STATS_CACHE_SIZE);
@@ -157,23 +157,22 @@ public abstract class BaseGenericObjectPool<T> {
         // 填充创建时异常堆栈追踪字符串
         this.creationStackTrace = getStackTrace(new Exception());
 
-        // save the current TCCL (if any) to be used later by the evictor Thread
+        // 保存当前的TCCL(如果有的话)稍后被逐出的线程使用-上下文类加载器
         ClassLoader cl = Thread.currentThread().getContextClassLoader();
+        //如果为空，类加载器为空
         if (cl == null) {
             factoryClassLoader = null;
         } else {
+            //否则使用弱引用存储
             factoryClassLoader = new WeakReference<ClassLoader>(cl);
         }
-
+        //获取配置中的是否公平属性
         fairness = config.getFairness();
     }
 
 
     /**
-     * Returns the maximum number of objects that can be allocated by the pool
-     * (checked out to clients, or idle awaiting checkout) at a given time. When
-     * negative, there is no limit to the number of objects that can be
-     * managed by the pool at one time.
+     * 最大对象数，为负数时，无限制
      *
      * @return the cap on the total number of object instances managed by the
      *         pool.
@@ -229,11 +228,7 @@ public abstract class BaseGenericObjectPool<T> {
     }
 
     /**
-     * Returns the maximum amount of time (in milliseconds) the
-     * <code>borrowObject()</code> method should block before throwing an
-     * exception when the pool is exhausted and
-     * {@link #getBlockWhenExhausted} is true. When less than 0, the
-     * <code>borrowObject()</code> method may block indefinitely.
+     * 最大等待时间，当小于0时，会无限期阻塞
      *
      * @return the maximum number of milliseconds <code>borrowObject()</code>
      *         will block.
@@ -604,10 +599,8 @@ public abstract class BaseGenericObjectPool<T> {
     }
 
     /**
-     * Sets the name of the {@link org.apache.commons.pool2.impl.EvictionPolicy} implementation that is
-     * used by this pool. The Pool will attempt to load the class using the
-     * thread context class loader. If that fails, the Pool will attempt to load
-     * the class using the class loader that loaded this class.
+     * 设置这个池使用的{@link org.apache.commons.pool2.impl.EvictionPolicy}接口的实现类的名字，
+     * 池将试图使用线程上下文类加载器加载该类。如果失败了，池将试图使用这个类的类加载器加载该类。
      *
      * @param evictionPolicyClassName   the fully qualified class name of the
      *                                  new eviction policy
@@ -619,15 +612,21 @@ public abstract class BaseGenericObjectPool<T> {
         try {
             Class<?> clazz;
             try {
+                //反射加载类对象
                 clazz = Class.forName(evictionPolicyClassName, true,
                         Thread.currentThread().getContextClassLoader());
             } catch (ClassNotFoundException e) {
+                //如果失败，换一种重载方法加载类对象
                 clazz = Class.forName(evictionPolicyClassName);
             }
+            //创建实例
             Object policy = clazz.newInstance();
+            //如果是该接口实现类
             if (policy instanceof org.apache.commons.pool2.impl.EvictionPolicy<?>) {
-                @SuppressWarnings("unchecked") // safe, because we just checked the class
+                @SuppressWarnings("unchecked") // 安全，因为我们刚刚检查了这个类
+                        //强转
                         org.apache.commons.pool2.impl.EvictionPolicy<T> evicPolicy = (org.apache.commons.pool2.impl.EvictionPolicy<T>) policy;
+                //赋值
                 this.evictionPolicy = evicPolicy;
             }
         } catch (ClassNotFoundException e) {
@@ -647,13 +646,14 @@ public abstract class BaseGenericObjectPool<T> {
 
 
     /**
+     * 关闭该池，销毁剩下的空闲对象，如果该类注册到了JMX，取消注册
      * Closes the pool, destroys the remaining idle objects and, if registered
      * in JMX, deregisters it.
      */
     public abstract void close();
 
     /**
-     * Has this pool instance been closed.
+     * 该池是否关闭
      * @return <code>true</code> when this pool has been closed.
      */
     public final boolean isClosed() {
@@ -661,6 +661,7 @@ public abstract class BaseGenericObjectPool<T> {
     }
 
     /**
+     * 驱逐
      * <p>Perform <code>numTests</code> idle object eviction tests, evicting
      * examined objects that meet the criteria for eviction. If
      * <code>testWhileIdle</code> is true, examined objects are validated
@@ -683,7 +684,7 @@ public abstract class BaseGenericObjectPool<T> {
     }
 
     /**
-     * Verifies that the pool is open.
+     * 验证该池是否打开，如果该池是关闭的，抛出非法状态异常
      * @throws IllegalStateException if the pool is closed.
      */
     final void assertOpen() throws IllegalStateException {
@@ -696,35 +697,41 @@ public abstract class BaseGenericObjectPool<T> {
      * <p>Starts the evictor with the given delay. If there is an evictor
      * running when this method is called, it is stopped and replaced with a
      * new evictor with the specified delay.</p>
+     * 用给定的延迟启动驱逐程序。如果有驱逐程序运行时调用此方法，它将停止并替换为新驱逐程序的指定延迟。
+     * <p>这个方法需要是fina的，因为它在构造函数中被调用,See POOL-195.</p>
      *
-     * <p>This method needs to be final, since it is called from a constructor.
-     * See POOL-195.</p>
-     *
-     * @param delay time in milliseconds before start and between eviction runs
+     * @param delay 在开始和驱逐之间之前的毫秒数
      */
     final void startEvictor(long delay) {
+        //驱逐锁
         synchronized (evictionLock) {
+            //如果已经有驱逐线程，表示驱逐程序正在运行
             if (null != evictor) {
+                //取消运行该线程
                 EvictionTimer.cancel(evictor);
+                //释放引用
                 evictor = null;
                 evictionIterator = null;
             }
+            //启动
             if (delay > 0) {
+                //创建新线程
                 evictor = new Evictor();
+                //定时启动该线程
                 EvictionTimer.schedule(evictor, delay, delay);
             }
         }
     }
 
     /**
-     * Tries to ensure that the configured minimum number of idle instances are
-     * available in the pool.
+     * 尝试确保在池中可以使用配置的最少空闲实例数。
+     * Tries to ensure that the configured minimum number of idle instances are available in the pool.
      * @throws Exception if an error occurs creating idle instances
      */
     abstract void ensureMinIdle() throws Exception;
 
 
-    // Monitoring (primarily JMX) related methods
+    // 监控(主要是JMX)相关的方法
 
     /**
      * Provides the name under which the pool has been registered with the
@@ -859,8 +866,7 @@ public abstract class BaseGenericObjectPool<T> {
     }
 
     /**
-     * The listener used (if any) to receive notifications of exceptions
-     * unavoidably swallowed by the pool.
+     * The listener used (if any) to receive notifications of exceptions unavoidably swallowed by the pool.
      *
      * @param swallowedExceptionListener    The listener or <code>null</code>
      *                                      for no listener
@@ -871,65 +877,76 @@ public abstract class BaseGenericObjectPool<T> {
     }
 
     /**
-     * Swallows an exception and notifies the configured listener for swallowed
-     * exceptions queue.
+     * 忍受一个异常并通知配置监听器的忍受异常队列
+     * Swallows an exception and notifies the configured listener for swallowed exceptions queue.
      *
      * @param e exception to be swallowed
      */
     final void swallowException(Exception e) {
+        //获取忍受异常监听器
         SwallowedExceptionListener listener = getSwallowedExceptionListener();
-
+        //如果为空，退出该方法
         if (listener == null) {
             return;
         }
 
         try {
+            //忍受异常时调用的方法
             listener.onSwallowException(e);
         } catch (OutOfMemoryError oome) {
             throw oome;
         } catch (VirtualMachineError vme) {
             throw vme;
         } catch (Throwable t) {
-            // Ignore. Enjoy the irony.
+            //忽略。。。。基本就炸了
         }
     }
 
     /**
-     * Updates statistics after an object is borrowed from the pool.
-     * @param p object borrowed from the pool
-     * @param waitTime time (in milliseconds) that the borrowing thread had to wait
+     * 在从池中借用对象之后更新统计数据。
+     * @param p 从池中借用的对象
+     * @param waitTime 时间(以毫秒为单位)，借用线程等待的时间
      */
     final void updateStatsBorrow(PooledObject<T> p, long waitTime) {
+        //借用总数增加
         borrowedCount.incrementAndGet();
+        //空闲时间累加，该对象的空闲时间
         idleTimes.add(p.getIdleTimeMillis());
+        //等待时间累加，借用该对象等待的时间
         waitTimes.add(waitTime);
 
-        // lock-free optimistic-locking maximum
+        // 无锁 乐观锁 最大等待时间
         long currentMax;
         do {
+            //获取最大借用等待时间
             currentMax = maxBorrowWaitTimeMillis.get();
             if (currentMax >= waitTime) {
+                //如果等待时间小于最大借用等待时间，跳出循环
                 break;
             }
+            //如果该时间大于最大借用等待时间才会执行这句话，将这个最大时间CAS为本次的等待时间，如果成功了，退出循环
         } while (!maxBorrowWaitTimeMillis.compareAndSet(currentMax, waitTime));
     }
 
     /**
-     * Updates statistics after an object is returned to the pool.
-     * @param activeTime the amount of time (in milliseconds) that the returning
-     * object was checked out
+     * 在对象返回池后更新统计数据
+     * @param activeTime 返回对象被检出的时间(以毫秒计)
      */
     final void updateStatsReturn(long activeTime) {
+        //返回次数+1
         returnedCount.incrementAndGet();
+        //活动时间累加
         activeTimes.add(activeTime);
     }
 
     /**
-     * Unregisters this pool's MBean.
+     * 注销这池的MBean。
      */
     final void jmxUnregister() {
+        //如果已经注册
         if (oname != null) {
             try {
+                //注销
                 ManagementFactory.getPlatformMBeanServer().unregisterMBean(
                         oname);
             } catch (MBeanRegistrationException e) {
@@ -1003,6 +1020,7 @@ public abstract class BaseGenericObjectPool<T> {
                 registered = true;
             }
         }
+        //返回
         return objectName;
     }
 
@@ -1012,19 +1030,22 @@ public abstract class BaseGenericObjectPool<T> {
      * @return exception stack trace as a string
      */
     private String getStackTrace(Exception e) {
-        // Need the exception in string form to prevent the retention of
-        // references to classes in the stack trace that could trigger a memory
-        // leak in a container environment.
+        // Need the exception in string form to prevent the retention of references to classes in the stack trace that could trigger a memory leak in a container environment.
+        //在字符串格式中需要异常，以防止在堆栈跟踪中保留对类的引用，从而在容器环境中触发内存泄漏。
+        //构建输出流
         Writer w = new StringWriter();
         PrintWriter pw = new PrintWriter(w);
+        //输出堆栈追踪到该流
         e.printStackTrace(pw);
+        //获取该流中的String格式的堆栈追踪返回
         return w.toString();
     }
 
-    // Inner classes
+    //内部类
 
     /**
-     * The idle object evictor {@link TimerTask}.
+     * 空闲对象驱逐器,
+     * 继承自TimeTask,可定时一次性，或多次执行的线程
      *
      * @see GenericKeyedObjectPool#setTimeBetweenEvictionRunsMillis
      */
@@ -1036,60 +1057,68 @@ public abstract class BaseGenericObjectPool<T> {
          * pools may exist in different class loaders, the Evictor ensures that
          * any actions taken are under the class loader of the factory
          * associated with the pool.
+         * 池维护运行。驱逐被驱逐的对象，然后 *确保空闲实例的最小数目是可用的。
+         * 自调用调用者的计时器被共享给所有的池，但是 *池可能存在于不同的类装入器中，
+         * 被逐出者确保 采取的任何行动都在工厂的类装载机下 与游泳池有关
          */
         @Override
         public void run() {
+            //获取线程上下文类加载器,只是保存用，在下面的finally中恢复
             ClassLoader savedClassLoader =
                     Thread.currentThread().getContextClassLoader();
             try {
+                //本身的工厂类加载器不为空
                 if (factoryClassLoader != null) {
-                    // Set the class loader for the factory
+                    // 获取该类加载器，因为本身被包含在弱引用中，所以通过get方法取出
                     ClassLoader cl = factoryClassLoader.get();
                     if (cl == null) {
-                        // The pool has been dereferenced and the class loader
-                        // GC'd. Cancel this timer so the pool can be GC'd as
-                        // well.
+                        //池已被取消引用，类加载器GC将被取消。取消这个计时器，这样池也可以是GC。
                         cancel();
                         return;
                     }
+                    //不为空，将该类加载器设置为到线程上下文类加载器
                     Thread.currentThread().setContextClassLoader(cl);
                 }
 
-                // Evict from the pool
+                // 从池中驱逐
                 try {
+                    //池的驱逐方法
                     evict();
                 } catch(Exception e) {
+                    //忍受异常
                     swallowException(e);
                 } catch(OutOfMemoryError oome) {
-                    // Log problem but give evictor thread a chance to continue
-                    // in case error is recoverable
+                    // 日志问题，但给驱逐者线程一个在错误是可恢复的情况下继续的机会
                     oome.printStackTrace(System.err);
                 }
-                // Re-create idle instances.
+                // 重新创建空闲实例
                 try {
+                    //确保池中空闲实例个数
                     ensureMinIdle();
                 } catch (Exception e) {
+                    //忍受异常
                     swallowException(e);
                 }
             } finally {
-                // Restore the previous CCL
+                //恢复之前的类加载器 CCL
                 Thread.currentThread().setContextClassLoader(savedClassLoader);
             }
         }
     }
 
     /**
-     * Maintains a cache of values for a single metric and reports
-     * statistics on the cached values.
+     * 维护一个关于唯一指标的缓存，并报告缓存值的统计信息
      */
     private class StatsStore {
-
+        //原子值数组
         private final AtomicLong values[];
+        //大小
         private final int size;
+        //索引
         private int index;
 
         /**
-         * Create a StatsStore with the given cache size.
+         * 使用给定的缓存大小创建该类
          *
          * @param size number of values to maintain in the cache.
          */
@@ -1097,6 +1126,7 @@ public abstract class BaseGenericObjectPool<T> {
             this.size = size;
             values = new AtomicLong[size];
             for (int i = 0; i < size; i++) {
+                //初始值都为-1
                 values[i] = new AtomicLong(-1);
             }
         }
