@@ -44,7 +44,7 @@ public abstract class BaseGenericObjectPool<T> {
      */
     public static final int MEAN_TIMING_STATS_CACHE_SIZE = 100;
 
-    // 配置属性
+    // 配置属性-大部分属性都引用自BaseObjectPoolConfig类
     //最大对象数量
     private volatile int maxTotal =
             GenericKeyedObjectPoolConfig.DEFAULT_MAX_TOTAL;
@@ -1132,9 +1132,9 @@ public abstract class BaseGenericObjectPool<T> {
         }
 
         /**
-         * Adds a value to the cache.  If the cache is full, one of the
-         * existing values is replaced by the new value.
+         * 增加一个值到这个缓存.如果这个缓存满了，现有的一个值将被新值替换,
          *
+         * 每次设置值时累加索引，如果索引等于缓存大小后，置为0
          * @param value new value to add to the cache.
          */
         public synchronized void add(long value) {
@@ -1146,17 +1146,25 @@ public abstract class BaseGenericObjectPool<T> {
         }
 
         /**
-         * Returns the mean of the cached values.
+         * 返回缓存的平均值
          *
          * @return the mean of the cache, truncated to long
          */
         public long getMean() {
+            //返回的平均值
             double result = 0;
+            //计数器
             int counter = 0;
+            //遍历
             for (int i = 0; i < size; i++) {
+                //获取缓存值
                 long value = values[i].get();
+                //如果不为-1，也就是非默认值
                 if (value != -1) {
+                    //计数器累加
                     counter++;
+                    //这个计算公式值得记一下，可以依次计算平均值，而不是一直累加后/数量
+                    //不过不清楚这种计算方式和普通方式的异同
                     result = result * ((counter - 1) / (double) counter) +
                             value/(double) counter;
                 }
@@ -1166,48 +1174,52 @@ public abstract class BaseGenericObjectPool<T> {
     }
 
     /**
-     * The idle object eviction iterator. Holds a reference to the idle objects.
+     * 空闲对象驱逐迭代器。保存对空闲对象的引用。
      */
     class EvictionIterator implements Iterator<PooledObject<T>> {
-
+        //双向队列
         private final Deque<PooledObject<T>> idleObjects;
+        //迭代器
         private final Iterator<PooledObject<T>> idleObjectIterator;
 
         /**
-         * Create an EvictionIterator for the provided idle instance deque.
+         * 构造方法
+         * 通过提供的空闲实例双向队列创建一个驱逐迭代器
          * @param idleObjects underlying deque
          */
         EvictionIterator(final Deque<PooledObject<T>> idleObjects) {
             this.idleObjects = idleObjects;
-
+            //如果是后进先出
             if (getLifo()) {
+                //返回一个倒序排序（也就是后进先出）的迭代器
                 idleObjectIterator = idleObjects.descendingIterator();
             } else {
+                //返回一个迭代器
                 idleObjectIterator = idleObjects.iterator();
             }
         }
 
         /**
-         * Returns the idle object deque referenced by this iterator.
+         * 返回该迭代器引用的空闲对象双向队列
          * @return the idle object deque
          */
         public Deque<PooledObject<T>> getIdleObjects() {
             return idleObjects;
         }
 
-        /** {@inheritDoc} */
+        /** {@inheritDoc} 是否有下一元素*/
         @Override
         public boolean hasNext() {
             return idleObjectIterator.hasNext();
         }
 
-        /** {@inheritDoc} */
+        /** {@inheritDoc} 下一元素*/
         @Override
         public PooledObject<T> next() {
             return idleObjectIterator.next();
         }
 
-        /** {@inheritDoc} */
+        /** {@inheritDoc} 删除该元素*/
         @Override
         public void remove() {
             idleObjectIterator.remove();
@@ -1216,20 +1228,18 @@ public abstract class BaseGenericObjectPool<T> {
     }
     
     /**
-     * Wrapper for objects under management by the pool.
+     * 在池中管理对象的包装。
      *
-     * GenericObjectPool and GenericKeyedObjectPool maintain references to all
-     * objects under management using maps keyed on the objects. This wrapper
-     * class ensures that objects can work as hash keys.
+     * GenericObjectPool和GenericKeyedObjectPool维护对所有对象的引用 ，使用map对对象进行管理。这个包装器类确保对象可以用作散列键（hashCode）。
      *
      * @param <T> type of objects in the pool
      */
     static class IdentityWrapper<T> {
-        /** Wrapped object */
+        /** 被包装的对象实例 */
         private final T instance;
         
         /**
-         * Create a wrapper for an instance.
+         * 通过对象创建一个该类实例.
          *
          * @param instance object to wrap
          */
@@ -1249,6 +1259,7 @@ public abstract class BaseGenericObjectPool<T> {
         }
         
         /**
+         * 获取这个包装对象
          * @return the wrapped object
          */
         public T getObject() {
