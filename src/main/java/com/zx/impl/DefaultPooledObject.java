@@ -310,24 +310,25 @@ public class DefaultPooledObject<T> implements PooledObject<T> {
     }
 
     /**
-     * Used to track how an object was obtained from the pool (the stack trace
-     * of the exception will show which code borrowed the object) and when the
-     * object was borrowed.
+     * 被遗弃对象创建的异常类
+     * 静态内部类
+     * 当这个对象被借用的时候,用于跟踪从池中获取对象的方式 (异常的堆栈跟踪将显示哪些代码借用了对象)
      */
     static class AbandonedObjectCreatedException extends Exception {
 
         private static final long serialVersionUID = 7398692158058772916L;
 
-        /** Date format */
+        /** 日期格式化 */
         //@GuardedBy("format")
         private static final SimpleDateFormat format = new SimpleDateFormat
             ("'Pooled object created' yyyy-MM-dd HH:mm:ss Z " +
              "'by the following code has not been returned to the pool:'");
 
+        //创建时间
         private final long _createdTime;
 
         /**
-         * Create a new instance.
+         * 创建新实例
          * <p>
          * @see Exception#Exception()
          */
@@ -336,8 +337,7 @@ public class DefaultPooledObject<T> implements PooledObject<T> {
             _createdTime = System.currentTimeMillis();
         }
 
-        // Override getMessage to avoid creating objects and formatting
-        // dates unless the log message will actually be used.
+        // 重写getMessage以避免创建对象和格式化日期，除非实际使用日志消息。
         @Override
         public String getMessage() {
             String msg;
