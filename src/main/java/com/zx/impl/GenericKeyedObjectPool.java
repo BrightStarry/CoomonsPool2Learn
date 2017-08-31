@@ -26,30 +26,18 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * {@link #borrowObject borrowObject} 方法；每次向其中一个方法提供一个新的键值,在给定的密钥下创建子新池，由包含的GenericKeyedObjectPool.
  *
  * <p>
- *
+ * 可选择的，在池中空闲时，可以配置池来检查并可能驱逐对象，并确保每个键都有最少的空闲对象（也就是说这个池中每个key都有若干对象）；
+ * 这是一个由‘空闲对象驱逐’线程执行的，异步运行。在配置这个可选特性时，应该谨慎使用；
+ * 驱逐程序运行与客户线程争夺池中的对象；因此，如果它们运行得太频繁，可能会导致性能问题
  * <p>
- * Optionally, one may configure the pool to examine and possibly evict objects
- * as they sit idle in the pool and to ensure that a minimum number of idle
- * objects is maintained for each key. This is performed by an "idle object
- * eviction" thread, which runs asynchronously. Caution should be used when
- * configuring this optional feature. Eviction runs contend with client threads
- * for access to objects in the pool, so if they run too frequently performance
- * issues may result.
+ * 这个类的目的是为了线程安全
  * <p>
- * Implementation note: To prevent possible deadlocks, care has been taken to
- * ensure that no call to a factory method will occur within a synchronization
- * block. See POOL-125 and DBCP-44 for more information.
- * <p>
- * This class is intended to be thread-safe.
  *
  * @see GenericObjectPool
  *
- * @param <K> The type of keys maintained by this pool.
- * @param <T> Type of element pooled in this pool.
+ * @param <K> 由这个池维护的键的类型。
+ * @param <T> 池中元素类型
  *
- * @version $Revision: 1679561 $
- *
- * @since 2.0
  */
 public class GenericKeyedObjectPool<K,T> extends BaseGenericObjectPool<T>
         implements KeyedObjectPool<K,T>, GenericKeyedObjectPoolMXBean<K> {
